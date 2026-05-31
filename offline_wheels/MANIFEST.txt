@@ -1,0 +1,29 @@
+Offline wheel bundle for Windows amd64 + Python 3.12.x
+Target: python-3.12.10-amd64.exe only on offline PC (no network)
+
+Runtime (required):
+  numpy-2.4.6-cp312-cp312-win_amd64.whl
+  scipy-1.17.1-cp312-cp312-win_amd64.whl
+  scapy-2.7.0-py3-none-any.whl
+  requests-2.34.2-py3-none-any.whl
+  certifi-2026.5.20-py3-none-any.whl
+  charset_normalizer-3.4.7-cp312-cp312-win_amd64.whl
+  idna-3.16-py3-none-any.whl
+  urllib3-2.7.0-py3-none-any.whl
+  cicflowmeter-0.4.2-py3-none-any.whl
+
+Build / install tools (recommended):
+  pip-26.1.1-py3-none-any.whl
+  setuptools-82.0.1-py3-none-any.whl
+  wheel-0.47.0-py3-none-any.whl
+  hatchling-1.29.0-py3-none-any.whl
+  packaging-26.2-py3-none-any.whl
+  pathspec-1.1.1-py3-none-any.whl
+  pluggy-1.6.0-py3-none-any.whl
+  trove_classifiers-2026.5.22.10-py3-none-any.whl
+  editables-0.6-py3-none-any.whl
+
+Verified: pip install --no-index --find-links=offline_wheels cicflowmeter (2026-05-27)
+
+Not included (install separately on offline PC if needed):
+  Npcap — required for live capture (-i) on Windows; not a Python package
