@@ -569,7 +569,7 @@ This guide does not download anything — use the installer file you already hav
 5. Finish the installer.
 6. **Restart the PC** if the installer asks you to.
 
-### Find your network interface name
+### List Npcap paths (quick)
 
 1. Open PowerShell in the project folder.
 2. Activate the virtual environment: `.\.venv\Scripts\Activate.ps1`
@@ -579,7 +579,111 @@ This guide does not download anything — use the installer file you already hav
 python -c "from scapy.all import get_if_list; print(get_if_list())"
 ```
 
-4. Copy one interface name from the list (often looks like `\Device\NPF_{...}`).
+4. Each line is an Npcap path (for example `\Device\NPF_{...}`).
+
+**Note:** If Python prints a **list** with `\\Device\\NPF_...`, that is normal — Python shows one backslash as `\\`. When you copy a path into `cicflowmeter -i`, use **one** backslash before `Device`, for example:
+
+```text
+\Device\NPF_{YOUR-GUID-HERE}
+```
+
+Do **not** copy `Device\NPF_...` without the leading `\`.
+
+The list order is **not** “best interface first.” Names like `Local Area Connection* 4` are often **WAN Miniport** adapters with little or no traffic. Use the methods below to find the right path.
+
+---
+
+### Map each Npcap path to a Windows adapter name
+
+This shows **which Windows adapter** each `\Device\NPF_{...}` path belongs to, and the **IPv4 address** (if any).
+
+1. Activate the venv: `.\.venv\Scripts\Activate.ps1`
+2. Run (copy the whole block, including the first and last lines):
+
+```powershell
+@'
+from scapy.all import IFACES
+for iface in IFACES.values():
+    ip = getattr(iface, "ip", None) or "(none)"
+    print(iface.network_name)
+    print("    ->", iface.name, "  IP:", ip)
+'@ | python
+```
+
+**Example output (yours will differ):**
+
+```text
+\Device\NPF_{7AA6BF30-DB8B-4B9C-9CC0-23511D4309F7}
+    -> Local Area Connection* 5  IP: (none)
+\Device\NPF_{D68FFFB6-3D04-4F1A-AD2A-F7576144CCAE}
+    -> Ethernet 2  IP: 192.168.1.50
+```
+
+| What you see | Meaning |
+|--------------|---------|
+| **Ethernet** / **Wi‑Fi** with your real LAN or internet IP | Usually the adapter to use for live capture |
+| **Local Area Connection\*** (no IP) | Often WAN Miniport — usually **not** where browser traffic goes |
+| **VMware**, **vEthernet**, **WSL**, **Hyper-V** | Only traffic for those tools |
+| **Loopback** / `\Device\NPF_Loopback` | Only `127.0.0.1` traffic |
+
+**Alternative — table with MAC and IPv4:**
+
+```powershell
+python -c "from scapy.all import show_interfaces; show_interfaces()"
+```
+
+---
+
+### Match your IP with `ipconfig` (pick the right adapter)
+
+1. In PowerShell, run:
+
+```powershell
+ipconfig
+```
+
+2. Find the adapter you use for the internet or LAN (for example **Ethernet** or **Wi‑Fi**) and note its **IPv4 Address** (for example `192.168.1.50`).
+3. In the **Map each Npcap path** output above, pick the `\Device\NPF_{...}` line whose **IP** matches that address.
+4. Use **that** path in `cicflowmeter -i`.
+
+---
+
+### Test whether an interface receives packets
+
+Use this when you are not sure which path sees traffic, or `live_flows.csv` stays empty.
+
+1. Open PowerShell **as Administrator**.
+2. Go to the project folder and activate the venv.
+3. Run the test (copy the whole block; about **5 seconds per interface**; skip loopback):
+
+```powershell
+@'
+from scapy.all import sniff, get_if_list
+for iface in get_if_list():
+    if "Loopback" in iface:
+        continue
+    print("Testing:", iface, flush=True)
+    try:
+        pkts = sniff(iface=iface, timeout=5, store=True)
+        print("  ->", len(pkts), "packets in 5 seconds")
+    except Exception as e:
+        print("  -> ERROR:", e)
+    print()
+'@ | python
+```
+
+4. **While each “Testing: …” line runs**, generate traffic on the PC you care about:
+   - Open a website in the browser, or  
+   - Run: `ping 8.8.8.8`
+5. When the script finishes, use the path with the **highest packet count** (often your Ethernet or Wi‑Fi adapter).
+
+| Packet count | Meaning |
+|--------------|---------|
+| **0** | Little or no traffic on that adapter (wrong choice for general capture) |
+| **Low** (1–20) | Some background traffic only |
+| **High** (hundreds+) while you browse/ping | Good candidate for `cicflowmeter -i` |
+
+---
 
 ### Run live capture
 
@@ -591,11 +695,23 @@ cd "D:\Tools\cicflowmeter"
 .\.venv\Scripts\Activate.ps1
 ```
 
-3. Run (replace the interface name with yours):
+3. Run with the **path you chose** from the steps above (example — replace with your path):
 
 ```powershell
 cicflowmeter -i "\Device\NPF_{YOUR-GUID-HERE}" -c live_flows.csv
 ```
+
+In **Command Prompt (cmd)**, use the same path in quotes:
+
+```cmd
+cicflowmeter -i "\Device\NPF_{YOUR-GUID-HERE}" -c live_flows.csv
+```
+
+4. While capture is running, generate traffic (browse the web or `ping 8.8.8.8`).
+5. Wait at least **10–20 seconds**, then press **Ctrl+C** to stop. Flow rows are written when flows end or when you stop capture.
+6. Open `live_flows.csv` and confirm it has data.
+
+**Reminder:** cicflowmeter live mode only records **IP over TCP or UDP**. Pure ARP or short ICMP may not appear as flows immediately.
 
 ---
 
@@ -669,6 +785,21 @@ If your PC is 32-bit or uses Python 3.11 or older, this wheel set will not work.
 ```powershell
 python -m cicflowmeter.sniffer -h
 ```
+
+### Live capture: `Interface '...' not found`
+
+1. Use the exact path from **Map each Npcap path** or **Test whether an interface receives packets** — not a shortened name.
+2. The path must start with `\Device\` (leading backslash), not `Device\`.
+3. In cmd, wrap the path in double quotes: `"\Device\NPF_{...}"`.
+4. If you copied from a Python **list**, remove extra backslashes — use `\Device\NPF_{...}`, not `\\Device\\NPF_{...}` in the shell command.
+
+### Live capture: `live_flows.csv` is empty
+
+1. Confirm you used the adapter that had **traffic** in the packet test (see [Test whether an interface receives packets](#test-whether-an-interface-receives-packets)).
+2. Run PowerShell **as Administrator**.
+3. Generate traffic while capture is running (browser or `ping 8.8.8.8`).
+4. Wait, then press **Ctrl+C** — do not close the window without stopping capture.
+5. Avoid the first entries in `get_if_list()` if they are WAN Miniports with no IP; use **Ethernet** / **Wi‑Fi** with your `ipconfig` IPv4 address instead.
 
 ### Install is very slow
 
@@ -755,5 +886,6 @@ Print or save this list. Check each box as you finish.
 - [ ] `cicflowmeter -h` shows help  
 - [ ] `All imports OK` from Step 7.2  
 - [ ] (Only for live capture) Npcap installed  
+- [ ] (Only for live capture) Mapped Npcap path to adapter name and tested packet count on the correct interface  
 
 **You are ready to use cicflowmeter offline.**
