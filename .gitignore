@@ -10,3 +10,6 @@ venv/
 *.pyc
 .idea
 .aider*
+build/
+dist/
+*.spec.bak

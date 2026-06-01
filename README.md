@@ -72,6 +72,25 @@ Sniff packets real-time from interface to flow request: (**need root permission*
 cicflowmeter -i eth0 -u http://localhost:8080/predict
 ```
 
+### Desktop GUI (Windows)
+
+A desktop application provides the same features as the CLI (PCAP conversion, batch/merge, live capture, URL output) with live monitoring (packet/flow counters and activity log).
+
+**Run from source:**
+
+```sh
+uv sync
+uv run cicflowmeter-gui
+```
+
+**Build a standalone `.exe`:**
+
+```powershell
+.\scripts\build-gui.ps1
+```
+
+The executable is written to `dist/CICFlowMeter.exe`. Live capture on Windows requires [Npcap](https://npcap.com/) and usually **Run as administrator**.
+
 ### References:
 
 1. https://www.unb.ca/cic/research/applications.html#CICFlowMeter

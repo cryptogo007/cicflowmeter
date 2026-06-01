@@ -16,6 +16,7 @@ dependencies = [
     "scipy>=1.11.4",
     "scapy>=2.5.0",
     "requests>=2.31.0",
+    "customtkinter>=5.2.2",
 ]
 changelog = "CHANGELOG.md"
 homepage = "https://github.com/hieulw/cicflowmeter"
@@ -23,11 +24,13 @@ repository = "https://github.com/hieulw/cicflowmeter"
 
 [project.scripts]
 cicflowmeter = "cicflowmeter.sniffer:main"
+cicflowmeter-gui = "cicflowmeter_gui.__main__:main"
 
 [dependency-groups]
 dev = [
     "pytest",
     "ruff",
+    "pyinstaller>=6.0",
 ]
 
 [build-system]

@@ -23,6 +23,7 @@ class FlowSession(DefaultSession):
         self.output = output
         self.logger = get_logger(self.verbose)
         self.packets_count = 0
+        self.flows_written = 0
         self.output_writer = output_writer_factory(self.output_mode, self.output)
 
         # NEW: lock protecting self.flows
@@ -138,7 +139,17 @@ class FlowSession(DefaultSession):
 
             # Finally write to output (IO outside the lock)
             self.output_writer.write(data)
+            self.flows_written += 1
             self.logger.debug(f"Flow Collected! Remain Flows = {len(self.flows)}")
+
+    def get_stats(self) -> dict[str, int]:
+        with self._lock:
+            active_flows = len(self.flows)
+        return {
+            "packets": self.packets_count,
+            "active_flows": active_flows,
+            "flows_written": self.flows_written,
+        }
 
     def flush_flows(self):
         # Write all remaining flows to output (for end of sniffing)
@@ -147,6 +158,7 @@ class FlowSession(DefaultSession):
             self.flows.clear()
         for flow in items:
             self.output_writer.write(flow.get_data(self.fields))
+            self.flows_written += 1
         try:
             del self.output_writer
         except Exception:

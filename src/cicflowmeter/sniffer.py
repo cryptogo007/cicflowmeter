@@ -1,18 +1,45 @@
 import argparse
 import time
+import threading
+from collections.abc import Callable
+from pathlib import Path
 
 from scapy.sendrecv import AsyncSniffer
 
 from cicflowmeter.flow_session import FlowSession
-import threading
-
-import os
-from pathlib import Path
 
 GC_INTERVAL = 1.0  # seconds (tune as needed)
 
+LogFn = Callable[[str], None] | None
+CancelFn = Callable[[], bool] | None
 
-def _start_periodic_gc(session, interval=GC_INTERVAL):
+
+def _emit(message: str, log: LogFn = None) -> None:
+    if log:
+        log(message)
+    else:
+        print(message)
+
+
+def _cancelled(should_cancel: CancelFn) -> bool:
+    return bool(should_cancel and should_cancel())
+
+
+def _parse_fields(fields: str | list[str] | None) -> list[str] | None:
+    if fields is None:
+        return None
+    if isinstance(fields, str):
+        return [f.strip() for f in fields.split(",") if f.strip()]
+    return list(fields)
+
+
+def _stop_session_gc(session: FlowSession) -> None:
+    if hasattr(session, "_gc_stop"):
+        session._gc_stop.set()
+        session._gc_thread.join(timeout=2.0)
+
+
+def _start_periodic_gc(session: FlowSession, interval: float = GC_INTERVAL) -> None:
     stop_event = threading.Event()
 
     def _gc_loop():
@@ -20,30 +47,32 @@ def _start_periodic_gc(session, interval=GC_INTERVAL):
             try:
                 session.garbage_collect(time.time())
             except Exception:
-                # Don't let GC threading failures kill the process
                 session.logger.exception("Periodic GC error")
 
     t = threading.Thread(target=_gc_loop, name="flow-gc", daemon=True)
     t.start()
-    # attach to session so we can stop it later
     session._gc_thread = t
     session._gc_stop = stop_event
 
 
 def create_sniffer(
-    input_file, input_interface, output_mode, output, input_directory=None, fields=None, verbose=False
+    input_file,
+    input_interface,
+    output_mode,
+    output,
+    input_directory=None,
+    fields=None,
+    verbose=False,
 ):
     assert sum([input_file is None, input_interface is None, input_directory is None]) == 2, (
         "Provide exactly one: interface, file, or directory input"
     )
-    if fields is not None:
-        fields = fields.split(",")
+    parsed_fields = _parse_fields(fields)
 
-    # Pass config to FlowSession constructor
     session = FlowSession(
         output_mode=output_mode,
         output=output,
-        fields=fields,
+        fields=parsed_fields,
         verbose=verbose,
     )
 
@@ -65,54 +94,101 @@ def create_sniffer(
         )
     return sniffer, session
 
-def process_directory_merged(input_dir, output_dir, fields=None, verbose=False):
-    input_path = Path(input_dir)
-    output_path = Path(output_dir)
-    
-    # Validate input and output directory
-    if not input_path.exists():
-        print(f"Error: Input directory '{input_dir}' does not exist")
-        return
-    
-    if not input_path.is_dir():
-        print(f"Error: Input path '{input_dir}' is not a directory")
-        return
-    
-    if output_path.exists() and output_path.is_file():
-        print(f"Error: Output path '{output_dir}' already exists as a file.")
-        print(f"Please provide a directory path for batch processing.")
-        return
-    
-    try:
-        output_path.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
-        print(f"Error: Could not create output directory '{output_dir}': {e}")
-        return
-    
-    # Find all pcap files
-    pcap_files = list(input_path.glob("*.pcap")) + list(input_path.glob("*.pcapng"))
-    
-    if not pcap_files:
-        print(f"Error: No pcap files found in {input_dir}")
-        return
-    
-    output_file = output_path / "merged_output.csv"
-    print(f"Found {len(pcap_files)} pcap file(s) to process")
-    print(f"Merging all flows into: {output_file.name}")
-    
-    # Create a single sniffer session for all files
-    session = FlowSession(
-        output_mode="csv",
-        output=str(output_file),
+
+def run_sniffer(
+    *,
+    input_file: str | None = None,
+    input_interface: str | None = None,
+    output_mode: str,
+    output: str,
+    fields: str | list[str] | None = None,
+    verbose: bool = False,
+    should_cancel: CancelFn = None,
+    log: LogFn = None,
+    on_session: Callable[[FlowSession], None] | None = None,
+) -> FlowSession:
+    """Run live or offline capture until finished or cancelled."""
+    sniffer, session = create_sniffer(
+        input_file=input_file,
+        input_interface=input_interface,
+        output_mode=output_mode,
+        output=output,
         fields=fields,
         verbose=verbose,
     )
-    
+    if on_session:
+        on_session(session)
+    sniffer.start()
+    try:
+        while getattr(sniffer, "running", False):
+            if _cancelled(should_cancel):
+                _emit("Stopping capture...", log)
+                sniffer.stop()
+                break
+            time.sleep(0.1)
+        sniffer.join()
+    finally:
+        _stop_session_gc(session)
+        session.flush_flows()
+    return session
+
+
+def process_directory_merged(
+    input_dir,
+    output_dir,
+    fields=None,
+    verbose=False,
+    log: LogFn = None,
+    should_cancel: CancelFn = None,
+):
+    input_path = Path(input_dir)
+    output_path = Path(output_dir)
+    parsed_fields = _parse_fields(fields)
+
+    if not input_path.exists():
+        _emit(f"Error: Input directory '{input_dir}' does not exist", log)
+        return
+
+    if not input_path.is_dir():
+        _emit(f"Error: Input path '{input_dir}' is not a directory", log)
+        return
+
+    if output_path.exists() and output_path.is_file():
+        _emit(f"Error: Output path '{output_dir}' already exists as a file.", log)
+        return
+
+    try:
+        output_path.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        _emit(f"Error: Could not create output directory '{output_dir}': {e}", log)
+        return
+
+    pcap_files = list(input_path.glob("*.pcap")) + list(input_path.glob("*.pcapng"))
+
+    if not pcap_files:
+        _emit(f"Error: No pcap files found in {input_dir}", log)
+        return
+
+    output_file = output_path / "merged_output.csv"
+    _emit(f"Found {len(pcap_files)} pcap file(s) to process", log)
+    _emit(f"Merging all flows into: {output_file.name}", log)
+
+    session = FlowSession(
+        output_mode="csv",
+        output=str(output_file),
+        fields=parsed_fields,
+        verbose=verbose,
+    )
+
     _start_periodic_gc(session, interval=GC_INTERVAL)
-    
+
     for idx, pcap_file in enumerate(pcap_files, 1):
-        print(f"[{idx}/{len(pcap_files)}] Processing {pcap_file.name}...")
-        
+        if _cancelled(should_cancel):
+            _emit("Batch processing cancelled.", log)
+            break
+
+        _emit(f"[{idx}/{len(pcap_files)}] Processing {pcap_file.name}...", log)
+
         try:
             sniffer = AsyncSniffer(
                 offline=str(pcap_file),
@@ -120,93 +196,86 @@ def process_directory_merged(input_dir, output_dir, fields=None, verbose=False):
                 prn=session.process,
                 store=False,
             )
-            
+
             sniffer.start()
             sniffer.join()
-            
-            print(f"[{idx}/{len(pcap_files)}] Completed {pcap_file.name}")
-        except Exception as e:
-            print(f"Error processing {pcap_file.name}: {e}")
-            continue
-    
-    # Stop periodic GC
-    if hasattr(session, "_gc_stop"):
-        session._gc_stop.set()
-        session._gc_thread.join(timeout=2.0)
-    
-    # Flush all remaining flows
-    session.flush_flows()
-    
-    print(f"\nAll done! Merged output saved to: {output_file}")
 
-def process_directory(input_dir, output_dir, fields=None, verbose=False):
+            _emit(f"[{idx}/{len(pcap_files)}] Completed {pcap_file.name}", log)
+        except Exception as e:
+            _emit(f"Error processing {pcap_file.name}: {e}", log)
+            continue
+
+    _stop_session_gc(session)
+    session.flush_flows()
+
+    if not _cancelled(should_cancel):
+        _emit(f"\nAll done! Merged output saved to: {output_file}", log)
+
+
+def process_directory(
+    input_dir,
+    output_dir,
+    fields=None,
+    verbose=False,
+    log: LogFn = None,
+    should_cancel: CancelFn = None,
+):
     input_path = Path(input_dir)
     output_path = Path(output_dir)
-    
-    # Validate input and output directory
+    parsed_fields = _parse_fields(fields)
 
     if not input_path.exists():
-        print(f"Error: Input directory '{input_dir}' does not exist")
+        _emit(f"Error: Input directory '{input_dir}' does not exist", log)
         return
-    
+
     if not input_path.is_dir():
-        print(f"Error: Input path '{input_dir}' is not a directory")
+        _emit(f"Error: Input path '{input_dir}' is not a directory", log)
         return
-    
+
     if output_path.exists() and output_path.is_file():
-        print(f"Error: Output path '{output_dir}' already exists as a file.")
-        print(f"Please provide a directory path for batch processing.")
-        print(f"Example: cicflowmeter -d ./pcaps/ -c ./output_directory/")
+        _emit(f"Error: Output path '{output_dir}' already exists as a file.", log)
         return
-    
-    # Create output directory if it doesn't exist
+
     try:
         output_path.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
-        print(f"Error: Could not create output directory '{output_dir}': {e}")
+    except OSError as e:
+        _emit(f"Error: Could not create output directory '{output_dir}': {e}", log)
         return
-    
-    # Find all pcap files
+
     pcap_files = list(input_path.glob("*.pcap")) + list(input_path.glob("*.pcapng"))
-    
+
     if not pcap_files:
-        print(f"Error: No pcap files found in {input_dir}")
+        _emit(f"Error: No pcap files found in {input_dir}", log)
         return
-    
-    print(f"Found {len(pcap_files)} pcap file(s) to process")
-    
+
+    _emit(f"Found {len(pcap_files)} pcap file(s) to process", log)
+
     for pcap_file in pcap_files:
+        if _cancelled(should_cancel):
+            _emit("Batch processing cancelled.", log)
+            break
+
         output_file = output_path / f"{pcap_file.stem}.csv"
-        print(f"Processing {pcap_file.name} -> {output_file.name}")
-        
+        _emit(f"Processing {pcap_file.name} -> {output_file.name}", log)
+
         try:
-            sniffer, session = create_sniffer(
+            run_sniffer(
                 input_file=str(pcap_file),
-                input_interface=None,
                 output_mode="csv",
                 output=str(output_file),
-                input_directory=None,
-                fields=fields,
+                fields=parsed_fields,
                 verbose=verbose,
+                should_cancel=should_cancel,
+                log=log,
             )
-            
-            sniffer.start()
-            sniffer.join()
-            
-            # Stop periodic GC
-            if hasattr(session, "_gc_stop"):
-                session._gc_stop.set()
-                session._gc_thread.join(timeout=2.0)
-            
-            # Flush all flows
-            session.flush_flows()
-            
-            print(f"Completed {pcap_file.name}")
+            _emit(f"Completed {pcap_file.name}", log)
         except Exception as e:
-            print(f"Error processing {pcap_file.name}: {e}")
+            _emit(f"Error processing {pcap_file.name}: {e}", log)
             continue
-    
-    print(f"\nAll done! Output files saved to: {output_dir}")
+
+    if not _cancelled(should_cancel):
+        _emit(f"\nAll done! Output files saved to: {output_dir}", log)
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -251,7 +320,6 @@ def main():
         dest="output_mode",
         help="output flows as request to url",
     )
-    
 
     parser.add_argument(
         "output",
@@ -293,29 +361,17 @@ def main():
             )
         return
 
-    sniffer, session = create_sniffer(
-        input_file=args.input_file,
-        input_interface=args.input_interface,
-        output_mode=args.output_mode,
-        output=args.output,
-        input_directory=None,
-        fields=args.fields,
-        verbose=args.verbose,
-    )
-    sniffer.start()
-
     try:
-        sniffer.join()
+        run_sniffer(
+            input_file=args.input_file,
+            input_interface=args.input_interface,
+            output_mode=args.output_mode,
+            output=args.output,
+            fields=args.fields,
+            verbose=args.verbose,
+        )
     except KeyboardInterrupt:
-        sniffer.stop()
-    finally:
-        # Stop periodic GC if present
-        if hasattr(session, "_gc_stop"):
-            session._gc_stop.set()
-            session._gc_thread.join(timeout=2.0)
-        sniffer.join()
-        # Flush all flows at the end
-        session.flush_flows()
+        pass
 
 
 if __name__ == "__main__":
