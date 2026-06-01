@@ -2,7 +2,7 @@ import threading
 from scapy.packet import Packet
 from scapy.sessions import DefaultSession
 
-from cicflowmeter.writer import output_writer_factory
+from cicflowmeter.writer import CSVWriter, output_writer_factory
 
 from .constants import EXPIRED_UPDATE, PACKETS_PER_GC
 from .features.context import PacketDirection, get_packet_flow_key
@@ -24,6 +24,7 @@ class FlowSession(DefaultSession):
         self.logger = get_logger(self.verbose)
         self.packets_count = 0
         self.flows_written = 0
+        self.segment_flows_written = 0
         self.output_writer = output_writer_factory(self.output_mode, self.output)
 
         # NEW: lock protecting self.flows
@@ -140,26 +141,59 @@ class FlowSession(DefaultSession):
             # Finally write to output (IO outside the lock)
             self.output_writer.write(data)
             self.flows_written += 1
+            self.segment_flows_written += 1
             self.logger.debug(f"Flow Collected! Remain Flows = {len(self.flows)}")
 
-    def get_stats(self) -> dict[str, int]:
+    def get_stats(self) -> dict:
         with self._lock:
             active_flows = len(self.flows)
         return {
             "packets": self.packets_count,
             "active_flows": active_flows,
             "flows_written": self.flows_written,
+            "segment_flows_written": self.segment_flows_written,
+            "output_file": self.output,
         }
 
-    def flush_flows(self):
-        # Write all remaining flows to output (for end of sniffing)
+    def _write_and_clear_flows(self) -> None:
         with self._lock:
             items = list(self.flows.values())
             self.flows.clear()
         for flow in items:
             self.output_writer.write(flow.get_data(self.fields))
             self.flows_written += 1
+            self.segment_flows_written += 1
+
+    def _close_output_writer(self) -> None:
+        writer = getattr(self, "output_writer", None)
+        if writer is None:
+            return
+        if isinstance(writer, CSVWriter):
+            writer.close()
         try:
             del self.output_writer
         except Exception:
             pass
+
+    def rotate_output(self, new_output: str) -> None:
+        """Flush active flows, close current file, and open a new CSV (live capture)."""
+        if self.output_mode != "csv":
+            raise RuntimeError("Output rotation is only supported for CSV mode")
+        with self._lock:
+            items = list(self.flows.values())
+            self.flows.clear()
+            for flow in items:
+                self.output_writer.write(flow.get_data(self.fields))
+                self.flows_written += 1
+                self.segment_flows_written += 1
+            self._close_output_writer()
+            self.output = new_output
+            self.segment_flows_written = 0
+            self.output_writer = output_writer_factory(self.output_mode, new_output)
+
+    def flush_flows(self):
+        # Write all remaining flows to output (for end of sniffing)
+        if not hasattr(self, "output_writer"):
+            return
+        self._write_and_clear_flows()
+        self._close_output_writer()

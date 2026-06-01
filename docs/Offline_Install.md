@@ -22,10 +22,12 @@ Open the project folder in File Explorer. It should look like this:
 
 ```
 cicflowmeter/
-├── Offline_Install.md       ← this guide
+├── docs/
+│   └── Offline_Install.md   ← this guide
 ├── pyproject.toml
 ├── src/
-│   └── cicflowmeter/
+│   ├── cicflowmeter/
+│   └── cicflowmeter_gui/
 └── offline_wheels/          ← 18 files ending in .whl
     ├── numpy-2.4.6-cp312-cp312-win_amd64.whl
     ├── scipy-1.17.1-cp312-cp312-win_amd64.whl
@@ -61,11 +63,12 @@ cicflowmeter/
 6. [Step 6 — Install packages from local wheels](#step-6--install-packages-from-local-wheels)
 7. [Step 7 — Verify the installation](#step-7--verify-the-installation)
 8. [Step 8 — Run cicflowmeter](#step-8--run-cicflowmeter)
-9. [Optional — Npcap for live network capture](#optional--npcap-for-live-network-capture)
-10. [Optional — Editable install (advanced)](#optional--editable-install-advanced)
-11. [Troubleshooting](#troubleshooting)
-12. [Appendix](#appendix)
-13. [Summary checklist](#summary-checklist)
+9. [Optional — Desktop GUI](#optional--desktop-gui)
+10. [Optional — Npcap for live network capture](#optional--npcap-for-live-network-capture)
+11. [Optional — Editable install (advanced)](#optional--editable-install-advanced)
+12. [Troubleshooting](#troubleshooting)
+13. [Appendix](#appendix)
+14. [Summary checklist](#summary-checklist)
 
 ---
 
@@ -193,7 +196,7 @@ In that folder, you should see:
 | `offline_wheels` | Folder |
 | `src` | Folder |
 | `pyproject.toml` | File |
-| `Offline_Install.md` | File |
+| `docs/Offline_Install.md` | File |
 
 Open `offline_wheels` and confirm there are **18** `.whl` files.
 
@@ -544,6 +547,29 @@ Only use this if you already have a server running on this PC:
 ```powershell
 cicflowmeter -f "D:\Data\capture.pcap" -u http://127.0.0.1:8080/flows
 ```
+
+---
+
+## Optional — Desktop GUI
+
+The project includes a Windows desktop application with the same features as the CLI (convert PCAP, batch/merge, live capture, monitoring).
+
+**Option A — Pre-built executable (simplest on offline PCs)**
+
+1. Copy `dist\CICFlowMeter.exe` from a machine that already built the app (see [DOCUMENTATION.md](DOCUMENTATION.md) § Packaging).
+2. Double-click to run. No Python or `.venv` required on that PC.
+3. For live capture, still install Npcap and run as Administrator (below).
+
+**Option B — Run from this installation**
+
+After Step 7, if `customtkinter` and `cicflowmeter` are installed in `.venv`:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+cicflowmeter-gui
+```
+
+Full GUI usage: [DOCUMENTATION.md § Desktop GUI](DOCUMENTATION.md#5-desktop-gui-windows).
 
 ---
 

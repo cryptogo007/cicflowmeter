@@ -7,6 +7,7 @@ from pathlib import Path
 from scapy.sendrecv import AsyncSniffer
 
 from cicflowmeter.flow_session import FlowSession
+from cicflowmeter.utils import live_csv_rotated_path
 
 GC_INTERVAL = 1.0  # seconds (tune as needed)
 
@@ -106,8 +107,18 @@ def run_sniffer(
     should_cancel: CancelFn = None,
     log: LogFn = None,
     on_session: Callable[[FlowSession], None] | None = None,
+    rotate_interval_seconds: float | None = None,
 ) -> FlowSession:
     """Run live or offline capture until finished or cancelled."""
+    is_live = input_interface is not None
+    if rotate_interval_seconds is not None:
+        if not is_live:
+            raise ValueError("CSV rotation interval is only supported for live capture (-i)")
+        if output_mode != "csv":
+            raise ValueError("CSV rotation interval requires CSV output mode (-c)")
+        if rotate_interval_seconds <= 0:
+            raise ValueError("CSV rotation interval must be greater than 0")
+
     sniffer, session = create_sniffer(
         input_file=input_file,
         input_interface=input_interface,
@@ -118,6 +129,10 @@ def run_sniffer(
     )
     if on_session:
         on_session(session)
+
+    rotate_segment = 0
+    segment_started = time.monotonic()
+
     sniffer.start()
     try:
         while getattr(sniffer, "running", False):
@@ -125,6 +140,19 @@ def run_sniffer(
                 _emit("Stopping capture...", log)
                 sniffer.stop()
                 break
+
+            if rotate_interval_seconds and is_live:
+                elapsed = time.monotonic() - segment_started
+                if elapsed >= rotate_interval_seconds:
+                    rotate_segment += 1
+                    new_output = live_csv_rotated_path(output, rotate_segment)
+                    session.rotate_output(new_output)
+                    segment_started = time.monotonic()
+                    _emit(
+                        f"Rotated CSV output (every {rotate_interval_seconds / 60:.1g} min) → {new_output}",
+                        log,
+                    )
+
             time.sleep(0.1)
         sniffer.join()
     finally:
@@ -341,9 +369,24 @@ def main():
 
     parser.add_argument("-v", "--verbose", action="store_true", help="more verbose")
 
+    parser.add_argument(
+        "--rotate-minutes",
+        type=float,
+        default=None,
+        metavar="N",
+        help="live CSV only: new file every N minutes (base.csv, base1.csv, base2.csv, ...)",
+    )
+
     args = parser.parse_args()
     if args.merge and not args.input_directory:
         parser.error("--merge can only be used with -d/--directory mode")
+    if args.rotate_minutes is not None:
+        if not args.input_interface:
+            parser.error("--rotate-minutes requires live capture (-i)")
+        if args.output_mode != "csv":
+            parser.error("--rotate-minutes requires CSV output (-c)")
+        if args.rotate_minutes <= 0:
+            parser.error("--rotate-minutes must be greater than 0")
     if args.input_directory:
         if args.merge:
             process_directory_merged(
@@ -361,6 +404,10 @@ def main():
             )
         return
 
+    rotate_seconds = None
+    if args.rotate_minutes is not None:
+        rotate_seconds = args.rotate_minutes * 60.0
+
     try:
         run_sniffer(
             input_file=args.input_file,
@@ -369,6 +416,7 @@ def main():
             output=args.output,
             fields=args.fields,
             verbose=args.verbose,
+            rotate_interval_seconds=rotate_seconds,
         )
     except KeyboardInterrupt:
         pass

@@ -32,6 +32,7 @@ class JobRequest:
     merge: bool = False
     fields: str | None = None
     verbose: bool = False
+    rotate_interval_minutes: float | None = None
 
 
 class JobWorker(threading.Thread):
@@ -92,6 +93,9 @@ class JobWorker(threading.Thread):
                     should_cancel=self._should_cancel,
                 )
             elif req.job_type == JobType.LIVE:
+                rotate_seconds = None
+                if req.rotate_interval_minutes is not None:
+                    rotate_seconds = req.rotate_interval_minutes * 60.0
                 run_sniffer(
                     input_interface=req.interface,
                     output_mode=req.output_mode,
@@ -101,6 +105,7 @@ class JobWorker(threading.Thread):
                     should_cancel=self._should_cancel,
                     log=self._log,
                     on_session=self._on_session,
+                    rotate_interval_seconds=rotate_seconds,
                 )
             else:
                 raise ValueError(f"Unknown job type: {req.job_type}")

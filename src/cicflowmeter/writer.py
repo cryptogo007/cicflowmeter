@@ -23,8 +23,12 @@ class CSVWriter(OutputWriter):
         self.file.flush()
         self.line += 1
 
+    def close(self) -> None:
+        if getattr(self, "file", None) and not self.file.closed:
+            self.file.close()
+
     def __del__(self):
-        self.file.close()
+        self.close()
 
 
 class HttpWriter(OutputWriter):

@@ -18,7 +18,7 @@ dependencies = [
     "requests>=2.31.0",
     "customtkinter>=5.2.2",
 ]
-changelog = "CHANGELOG.md"
+changelog = "docs/CHANGELOG.md"
 homepage = "https://github.com/hieulw/cicflowmeter"
 repository = "https://github.com/hieulw/cicflowmeter"
 

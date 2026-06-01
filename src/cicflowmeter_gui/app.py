@@ -151,21 +151,42 @@ class CICFlowMeterApp(ctk.CTk):
         live_out_frame.grid(row=3, column=1, sticky="w", padx=8, pady=4)
         self.live_output_mode_var = tk.StringVar(value="csv")
         ctk.CTkRadioButton(
-            live_out_frame, text="CSV file", variable=self.live_output_mode_var, value="csv"
+            live_out_frame,
+            text="CSV file",
+            variable=self.live_output_mode_var,
+            value="csv",
+            command=self._on_live_output_mode_change,
         ).pack(side="left", padx=(0, 12))
         ctk.CTkRadioButton(
-            live_out_frame, text="HTTP URL", variable=self.live_output_mode_var, value="url"
+            live_out_frame,
+            text="HTTP URL",
+            variable=self.live_output_mode_var,
+            value="url",
+            command=self._on_live_output_mode_change,
         ).pack(side="left")
 
-        ctk.CTkLabel(tab, text="Fields (optional)").grid(row=4, column=0, sticky="nw", padx=8, pady=4)
+        ctk.CTkLabel(tab, text="CSV rotation").grid(row=4, column=0, sticky="w", padx=8, pady=4)
+        rotate_frame = ctk.CTkFrame(tab, fg_color="transparent")
+        rotate_frame.grid(row=4, column=1, columnspan=2, sticky="w", padx=8, pady=4)
+        self.live_rotate_enable = ctk.CTkCheckBox(
+            rotate_frame,
+            text="New file every",
+            command=self._on_live_rotate_toggle,
+        )
+        self.live_rotate_enable.pack(side="left", padx=(0, 8))
+        self.live_rotate_minutes = ctk.CTkEntry(rotate_frame, width=60, placeholder_text="5")
+        self.live_rotate_minutes.pack(side="left", padx=(0, 4))
+        ctk.CTkLabel(rotate_frame, text="min → base.csv, base1.csv, base2.csv…").pack(side="left")
+
+        ctk.CTkLabel(tab, text="Fields (optional)").grid(row=5, column=0, sticky="nw", padx=8, pady=4)
         self.live_fields = ctk.CTkEntry(tab, placeholder_text="Comma-separated column names (empty = all features)")
-        self.live_fields.grid(row=4, column=1, columnspan=2, sticky="ew", padx=8, pady=4)
+        self.live_fields.grid(row=5, column=1, columnspan=2, sticky="ew", padx=8, pady=4)
 
         self.live_verbose = ctk.CTkCheckBox(tab, text="Verbose logging")
-        self.live_verbose.grid(row=5, column=1, sticky="w", padx=8, pady=4)
+        self.live_verbose.grid(row=6, column=1, sticky="w", padx=8, pady=4)
 
         btn_frame = ctk.CTkFrame(tab, fg_color="transparent")
-        btn_frame.grid(row=6, column=1, sticky="w", padx=8, pady=12)
+        btn_frame.grid(row=7, column=1, sticky="w", padx=8, pady=12)
         self.live_start_btn = ctk.CTkButton(btn_frame, text="Start capture", command=self._start_live)
         self.live_start_btn.pack(side="left", padx=(0, 8))
         self.live_stop_btn = ctk.CTkButton(
@@ -173,6 +194,7 @@ class CICFlowMeterApp(ctk.CTk):
         )
         self.live_stop_btn.pack(side="left")
 
+        self._on_live_output_mode_change()
         self._update_live_warning()
 
     def _build_monitor_panel(self) -> None:
@@ -194,9 +216,12 @@ class CICFlowMeterApp(ctk.CTk):
         self.written_label = ctk.CTkLabel(top, text="Flows written: 0", anchor="w")
         self.written_label.grid(row=0, column=3, sticky="w", padx=4)
 
-        ctk.CTkLabel(panel, text="Activity log").grid(row=1, column=0, sticky="w", padx=12, pady=(4, 0))
+        self.output_file_label = ctk.CTkLabel(panel, text="Output file: —", anchor="w")
+        self.output_file_label.grid(row=1, column=0, sticky="w", padx=12, pady=(0, 0))
+
+        ctk.CTkLabel(panel, text="Activity log").grid(row=2, column=0, sticky="w", padx=12, pady=(4, 0))
         self.log_box = ctk.CTkTextbox(panel, height=160)
-        self.log_box.grid(row=2, column=0, sticky="ew", padx=8, pady=(4, 8))
+        self.log_box.grid(row=3, column=0, sticky="ew", padx=8, pady=(4, 8))
         self.log_box.configure(state="disabled")
 
     def _on_convert_mode(self) -> None:
@@ -206,6 +231,37 @@ class CICFlowMeterApp(ctk.CTk):
         else:
             self.convert_merge.deselect()
             self.convert_merge.configure(state="disabled")
+
+    def _on_live_output_mode_change(self) -> None:
+        csv_mode = self.live_output_mode_var.get() == "csv"
+        state = "normal" if csv_mode else "disabled"
+        self.live_rotate_enable.configure(state=state)
+        self.live_rotate_minutes.configure(state=state)
+        if not csv_mode:
+            self.live_rotate_enable.deselect()
+
+    def _on_live_rotate_toggle(self) -> None:
+        if self.live_rotate_enable.get() and not self.live_rotate_minutes.get().strip():
+            self.live_rotate_minutes.insert(0, "5")
+
+    def _parse_live_rotate_minutes(self) -> float | None:
+        if not self.live_rotate_enable.get():
+            return None
+        if self.live_output_mode_var.get() != "csv":
+            return None
+        raw = self.live_rotate_minutes.get().strip()
+        if not raw:
+            messagebox.showerror("Invalid interval", "Enter rotation interval in minutes (e.g. 5).")
+            return None
+        try:
+            minutes = float(raw)
+        except ValueError:
+            messagebox.showerror("Invalid interval", "Rotation interval must be a number.")
+            return None
+        if minutes <= 0:
+            messagebox.showerror("Invalid interval", "Rotation interval must be greater than 0.")
+            return None
+        return minutes
 
     def _refresh_interfaces(self) -> None:
         ifaces = list_network_interfaces()
@@ -234,7 +290,8 @@ class CICFlowMeterApp(ctk.CTk):
     def _reset_stats(self) -> None:
         self.packets_label.configure(text="Packets: 0")
         self.active_label.configure(text="Active flows: 0")
-        self.written_label.configure(text="Flows written: 0")
+        self.written_label.configure(text="Flows written (segment): 0")
+        self.output_file_label.configure(text="Output file: —")
 
     def _update_stats_from_session(self) -> None:
         session = self._active_session
@@ -246,7 +303,11 @@ class CICFlowMeterApp(ctk.CTk):
             return
         self.packets_label.configure(text=f"Packets: {stats['packets']:,}")
         self.active_label.configure(text=f"Active flows: {stats['active_flows']:,}")
-        self.written_label.configure(text=f"Flows written: {stats['flows_written']:,}")
+        segment_written = stats.get("segment_flows_written", stats["flows_written"])
+        self.written_label.configure(text=f"Flows written (segment): {segment_written:,}")
+        output_file = stats.get("output_file")
+        if output_file:
+            self.output_file_label.configure(text=f"Output file: {output_file}")
 
     def _browse_convert_input(self) -> None:
         if self.convert_mode.get() == "file":
@@ -393,6 +454,10 @@ class CICFlowMeterApp(ctk.CTk):
             if not messagebox.askyesno("Capture warning", f"{warning}\n\nStart capture anyway?"):
                 return
 
+        rotate_minutes = self._parse_live_rotate_minutes()
+        if rotate_minutes is None and self.live_rotate_enable.get():
+            return
+
         request = JobRequest(
             job_type=JobType.LIVE,
             interface=iface,
@@ -400,8 +465,14 @@ class CICFlowMeterApp(ctk.CTk):
             output_mode=mode,
             fields=self.live_fields.get().strip() or None,
             verbose=bool(self.live_verbose.get()),
+            rotate_interval_minutes=rotate_minutes,
         )
-        self._append_log(f"Starting live capture on {iface}…")
+        if rotate_minutes:
+            self._append_log(
+                f"Starting live capture on {iface} (new CSV every {rotate_minutes:g} min)…"
+            )
+        else:
+            self._append_log(f"Starting live capture on {iface}…")
         self._start_job(request)
 
     def _stop_job(self) -> None:
