@@ -1,4 +1,5 @@
 import argparse
+import sys
 import time
 import threading
 from collections.abc import Callable
@@ -6,6 +7,7 @@ from pathlib import Path
 
 from scapy.sendrecv import AsyncSniffer
 
+from cicflowmeter.fields import EXPORT_FIELD_NAMES, parse_export_fields
 from cicflowmeter.flow_session import FlowSession
 from cicflowmeter.utils import live_csv_rotated_path
 
@@ -24,14 +26,6 @@ def _emit(message: str, log: LogFn = None) -> None:
 
 def _cancelled(should_cancel: CancelFn) -> bool:
     return bool(should_cancel and should_cancel())
-
-
-def _parse_fields(fields: str | list[str] | None) -> list[str] | None:
-    if fields is None:
-        return None
-    if isinstance(fields, str):
-        return [f.strip() for f in fields.split(",") if f.strip()]
-    return list(fields)
 
 
 def _stop_session_gc(session: FlowSession) -> None:
@@ -68,7 +62,7 @@ def create_sniffer(
     assert sum([input_file is None, input_interface is None, input_directory is None]) == 2, (
         "Provide exactly one: interface, file, or directory input"
     )
-    parsed_fields = _parse_fields(fields)
+    parsed_fields = parse_export_fields(fields)
 
     session = FlowSession(
         output_mode=output_mode,
@@ -171,7 +165,7 @@ def process_directory_merged(
 ):
     input_path = Path(input_dir)
     output_path = Path(output_dir)
-    parsed_fields = _parse_fields(fields)
+    parsed_fields = parse_export_fields(fields)
 
     if not input_path.exists():
         _emit(f"Error: Input directory '{input_dir}' does not exist", log)
@@ -250,7 +244,7 @@ def process_directory(
 ):
     input_path = Path(input_dir)
     output_path = Path(output_dir)
-    parsed_fields = _parse_fields(fields)
+    parsed_fields = parse_export_fields(fields)
 
     if not input_path.exists():
         _emit(f"Error: Input directory '{input_dir}' does not exist", log)
@@ -306,6 +300,11 @@ def process_directory(
 
 
 def main():
+    if "--list-fields" in sys.argv:
+        for name in EXPORT_FIELD_NAMES:
+            print(name)
+        return
+
     parser = argparse.ArgumentParser()
 
     input_group = parser.add_mutually_exclusive_group(required=True)
@@ -359,6 +358,12 @@ def main():
         action="store",
         dest="fields",
         help="comma separated fields to include in output (default: all)",
+    )
+
+    parser.add_argument(
+        "--list-fields",
+        action="store_true",
+        help="print all exportable column names and exit",
     )
 
     parser.add_argument(

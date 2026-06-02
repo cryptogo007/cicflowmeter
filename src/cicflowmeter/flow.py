@@ -1,6 +1,7 @@
 from scapy.packet import Packet
 
 from . import constants
+from .fields import filter_export_data
 from .features.context import PacketDirection, get_packet_flow_key
 from .features.flag_count import FlagCount
 from .features.flow_bytes import FlowBytes
@@ -186,10 +187,7 @@ class Flow:
         data["subflow_fwd_byts"] = data["totlen_fwd_pkts"]
         data["subflow_bwd_byts"] = data["totlen_bwd_pkts"]
 
-        if include_fields is not None:
-            data = {k: v for k, v in data.items() if k in include_fields}
-
-        return data
+        return filter_export_data(data, include_fields)
 
     def add_packet(self, packet: Packet, direction: PacketDirection) -> None:
         """Adds a packet to the current list of packets.

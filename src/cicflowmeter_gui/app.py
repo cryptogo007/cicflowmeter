@@ -10,7 +10,9 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
+from cicflowmeter.fields import fields_to_csv_arg, selection_summary
 from cicflowmeter.flow_session import FlowSession
+from cicflowmeter_gui.field_picker import FieldPickerDialog
 from cicflowmeter_gui.platform_win import capture_readiness_message, list_network_interfaces
 from cicflowmeter_gui.worker import JobRequest, JobType, JobWorker
 
@@ -33,6 +35,8 @@ class CICFlowMeterApp(ctk.CTk):
         self._session_queue: queue.Queue | None = None
         self._active_session: FlowSession | None = None
         self._running = False
+        self._export_fields: list[str] | None = None
+        self._export_fields_labels: list[ctk.CTkLabel] = []
 
         self._build_ui()
         self._refresh_interfaces()
@@ -96,11 +100,7 @@ class CICFlowMeterApp(ctk.CTk):
             out_frame, text="HTTP URL", variable=self.convert_output_mode_var, value="url"
         ).pack(side="left")
 
-        ctk.CTkLabel(tab, text="Fields (optional)").grid(row=5, column=0, sticky="nw", padx=8, pady=4)
-        self.convert_fields = ctk.CTkEntry(
-            tab, placeholder_text="Comma-separated column names (empty = all features)"
-        )
-        self.convert_fields.grid(row=5, column=1, columnspan=2, sticky="ew", padx=8, pady=4)
+        self._add_export_fields_row(tab, row=5)
 
         self.convert_verbose = ctk.CTkCheckBox(tab, text="Verbose logging")
         self.convert_verbose.grid(row=6, column=1, sticky="w", padx=8, pady=4)
@@ -178,9 +178,7 @@ class CICFlowMeterApp(ctk.CTk):
         self.live_rotate_minutes.pack(side="left", padx=(0, 4))
         ctk.CTkLabel(rotate_frame, text="min → base.csv, base1.csv, base2.csv…").pack(side="left")
 
-        ctk.CTkLabel(tab, text="Fields (optional)").grid(row=5, column=0, sticky="nw", padx=8, pady=4)
-        self.live_fields = ctk.CTkEntry(tab, placeholder_text="Comma-separated column names (empty = all features)")
-        self.live_fields.grid(row=5, column=1, columnspan=2, sticky="ew", padx=8, pady=4)
+        self._add_export_fields_row(tab, row=5)
 
         self.live_verbose = ctk.CTkCheckBox(tab, text="Verbose logging")
         self.live_verbose.grid(row=6, column=1, sticky="w", padx=8, pady=4)
@@ -223,6 +221,37 @@ class CICFlowMeterApp(ctk.CTk):
         self.log_box = ctk.CTkTextbox(panel, height=160)
         self.log_box.grid(row=3, column=0, sticky="ew", padx=8, pady=(4, 8))
         self.log_box.configure(state="disabled")
+
+    def _add_export_fields_row(self, tab: ctk.CTkFrame, *, row: int) -> None:
+        ctk.CTkLabel(tab, text="Export columns").grid(row=row, column=0, sticky="w", padx=8, pady=4)
+        fields_frame = ctk.CTkFrame(tab, fg_color="transparent")
+        fields_frame.grid(row=row, column=1, columnspan=2, sticky="ew", padx=8, pady=4)
+        fields_frame.grid_columnconfigure(0, weight=1)
+        label = ctk.CTkLabel(
+            fields_frame,
+            text=selection_summary(self._export_fields),
+            anchor="w",
+        )
+        label.grid(row=0, column=0, sticky="ew")
+        self._export_fields_labels.append(label)
+        ctk.CTkButton(
+            fields_frame,
+            text="Choose columns…",
+            width=140,
+            command=self._open_field_picker,
+        ).grid(row=0, column=1, padx=(8, 0))
+
+    def _open_field_picker(self) -> None:
+        def on_apply(selected: list[str] | None) -> None:
+            self._export_fields = selected
+            summary = selection_summary(selected)
+            for lbl in self._export_fields_labels:
+                lbl.configure(text=summary)
+
+        FieldPickerDialog(self, initial=self._export_fields, on_apply=on_apply)
+
+    def _export_fields_arg(self) -> str | None:
+        return fields_to_csv_arg(self._export_fields)
 
     def _on_convert_mode(self) -> None:
         is_folder = self.convert_mode.get() == "folder"
@@ -427,7 +456,7 @@ class CICFlowMeterApp(ctk.CTk):
             output_path=output_path,
             output_mode=self._convert_output_mode(),
             merge=merge,
-            fields=self.convert_fields.get().strip() or None,
+            fields=self._export_fields_arg(),
             verbose=bool(self.convert_verbose.get()),
         )
         self._append_log(f"Starting conversion ({job_type.value})…")
@@ -463,7 +492,7 @@ class CICFlowMeterApp(ctk.CTk):
             interface=iface,
             output_path=output_path,
             output_mode=mode,
-            fields=self.live_fields.get().strip() or None,
+            fields=self._export_fields_arg(),
             verbose=bool(self.live_verbose.get()),
             rotate_interval_minutes=rotate_minutes,
         )
